@@ -1,0 +1,1 @@
+# CARS uses only Python standard library — no extra packages needed

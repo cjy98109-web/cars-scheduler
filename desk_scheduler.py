@@ -112,17 +112,26 @@ def parse_availability_range(raw):
 def avail_for_shifts(raw, shifts):
     """
     Return list of shift IDs that the person's availability covers.
-    A shift is covered if the person's range includes the shift's full window.
+    A shift is covered if ANY of the person's time ranges includes the full window.
+    Handles multi-range cells separated by newlines or commas.
     """
-    rng = parse_availability_range(raw)
-    if rng is None:
+    if not raw:
         return []
-    avail_start, avail_end = rng
-    covered = []
-    for sh in shifts:
-        if avail_start <= sh["start"] and avail_end >= sh["end"]:
-            covered.append(sh["id"])
-    return covered
+    # Split on newlines or semicolons to handle multiple ranges in one cell
+    segments = re.split(r"[\n;]+", raw.strip())
+    covered = set()
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+        rng = parse_availability_range(seg)
+        if rng is None:
+            continue
+        avail_start, avail_end = rng
+        for sh in shifts:
+            if avail_start <= sh["start"] and avail_end >= sh["end"]:
+                covered.add(sh["id"])
+    return list(covered)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -153,12 +162,27 @@ def parse_worker_csv(raw_text, include_saturday=False):
 
     headers = [h.strip() for h in rows[0]]
 
-    # De-duplicate by email (keep latest submission)
+    # De-duplicate by email — prefer the submission that has availability data.
+    # If someone resubmits with a different role (no availability cols filled),
+    # keep the earlier submission that has the availability.
     seen = {}
+    avail_col_range = range(40, 55)  # broad range covering availability cols
     for row in rows[1:]:
         if not any(c.strip() for c in row): continue
         key = row[1].strip().lower() if len(row) > 1 else str(id(row))
-        seen[key] = row
+        has_avail = any(
+            row[i].strip() for i in avail_col_range if i < len(row)
+        )
+        prev = seen.get(key)
+        if prev is None:
+            seen[key] = row
+        else:
+            prev_has_avail = any(
+                prev[i].strip() for i in avail_col_range if i < len(prev)
+            )
+            # Only replace if new row has availability and old one doesn't
+            if has_avail and not prev_has_avail:
+                seen[key] = row
     data_rows = list(seen.values())
 
     workers = []

@@ -20,6 +20,7 @@ import json
 import csv
 import io
 import re
+import random
 from urllib.parse import urlparse
 from collections import defaultdict
 
@@ -328,15 +329,18 @@ def generate_schedule(workers, include_saturday=False, max_per_worker=None):
         return (count[name] / total, count[name], name)
 
     def pick_one(eligible, already_assigned):
-        """Pick the lowest-load eligible worker not already on this slot."""
+        """Pick the lowest-load eligible worker not already on this slot.
+        Pool is shuffled first so ties resolve randomly each run."""
         pool = [n for n in eligible if n not in already_assigned]
         if max_per_worker:
             pool = [n for n in pool if count.get(n, 0) < max_per_worker]
         if not pool:
             return None
+        random.shuffle(pool)
         return min(pool, key=score)
 
-    # Sort slots: fewest eligible first (most constrained gets priority)
+    # Sort slots: fewest eligible first, shuffled within same-size groups
+    random.shuffle(slots)
     sorted_slots = sorted(slots, key=lambda s: len(slot_eligible[s]))
 
     schedule = {day: {} for day in days_to_use}

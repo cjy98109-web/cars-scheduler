@@ -113,14 +113,22 @@ def avail_for_shifts(raw, shifts):
     """
     Return list of shift IDs that the person's availability covers.
     A shift is covered if ANY of the person's time ranges includes the full window.
-    Handles multi-range cells separated by newlines or commas.
+    Handles multi-range cells separated by newlines, semicolons, or commas
+    (but not commas that are part of a single range like "8:30-10:30, 2:30-4:30").
     """
     if not raw:
         return []
-    # Split on newlines or semicolons to handle multiple ranges in one cell
+    # Split on newlines or semicolons first
     segments = re.split(r"[\n;]+", raw.strip())
-    covered = set()
+    # Then also split on commas that separate ranges (a comma between two time-like tokens)
+    expanded = []
     for seg in segments:
+        # Split on comma only if what follows looks like a new time (digit after optional space)
+        parts = re.split(r",\s*(?=\d)", seg)
+        expanded.extend(parts)
+
+    covered = set()
+    for seg in expanded:
         seg = seg.strip()
         if not seg:
             continue
@@ -128,8 +136,14 @@ def avail_for_shifts(raw, shifts):
         if rng is None:
             continue
         avail_start, avail_end = rng
+        # If both times are clearly AM (before 8am) in a work-hours context,
+        # assume the person meant PM (e.g. "2:30-4:30" → 14:30-16:30)
+        if avail_end < 8 * 60:
+            avail_start += 12 * 60
+            avail_end   += 12 * 60
         for sh in shifts:
-            if avail_start <= sh["start"] and avail_end >= sh["end"]:
+            # Allow up to 30 min grace on the start time for partial availability entries
+            if avail_start <= sh["start"] + 30 and avail_end >= sh["end"]:
                 covered.add(sh["id"])
     return list(covered)
 
@@ -165,23 +179,28 @@ def parse_worker_csv(raw_text, include_saturday=False):
     # De-duplicate by email — prefer the submission that has availability data.
     # If someone resubmits with a different role (no availability cols filled),
     # keep the earlier submission that has the availability.
+    # Use a narrow range covering only the desk-availability columns (not virtual session cols).
     seen = {}
-    avail_col_range = range(40, 55)  # broad range covering availability cols
+    avail_col_range = range(38, 50)  # covers desk availability cols only
+
+    def row_has_desk_avail(row):
+        """True if any desk-availability cell has a real time value."""
+        for i in avail_col_range:
+            if i >= len(row):
+                continue
+            v = row[i].strip().lower()
+            if v and v not in ("not free", "not on", "n/a", "no", "none", ""):
+                return True
+        return False
+
     for row in rows[1:]:
         if not any(c.strip() for c in row): continue
         key = row[1].strip().lower() if len(row) > 1 else str(id(row))
-        has_avail = any(
-            row[i].strip() for i in avail_col_range if i < len(row)
-        )
         prev = seen.get(key)
         if prev is None:
             seen[key] = row
         else:
-            prev_has_avail = any(
-                prev[i].strip() for i in avail_col_range if i < len(prev)
-            )
-            # Only replace if new row has availability and old one doesn't
-            if has_avail and not prev_has_avail:
+            if row_has_desk_avail(row) and not row_has_desk_avail(prev):
                 seen[key] = row
     data_rows = list(seen.values())
 
